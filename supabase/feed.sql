@@ -1,0 +1,12 @@
+-- ============================================================
+-- DEPRECATED — do not run.
+--
+-- The Feed page reads from the `macro_feed` table populated by the
+-- scrapers in the `Feed/` directory at the repo root.
+--
+-- The schema and policies live in:
+--   Feed/001_macro_feed.sql                 (table + indexes + RLS)
+--   Feed/002_macro_feed_select_policy.sql   (authenticated read policy)
+--
+-- Run those two files in the Supabase SQL Editor instead.
+-- ============================================================

@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+/* ── Design tokens ── */
+:root,
+html.light {
+  --c-bg: #FAFAF8;
+  --c-surface: #FFFFFF;
+  --c-surface2: #F2F1ED;
+  --c-line: #E7E5DF;
+  --c-line2: #D6D3CB;
+  --c-ink: #1A1A19;
+  --c-dim: #545350;
+  --c-mute: #8A8884;
+  --c-accent: #5B7FFF;
+  --c-accent-soft: rgba(91, 127, 255, 0.12);
+  --shadow-card: 0 1px 2px rgba(20, 18, 12, 0.06);
+  --shadow-drawer: -12px 0 40px rgba(20, 18, 12, 0.18);
+  --scrim: rgba(20, 18, 12, 0.3);
+}
+
+html.dark {
+  --c-bg: #0F0F0F;
+  --c-surface: #1A1A1A;
+  --c-surface2: #202020;
+  --c-line: #2A2A2A;
+  --c-line2: #353535;
+  --c-ink: #EDEDED;
+  --c-dim: #A8A8A8;
+  --c-mute: #6E6E6E;
+  --c-accent: #5B7FFF;
+  --c-accent-soft: rgba(91, 127, 255, 0.14);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.55);
+  --scrim: rgba(0, 0, 0, 0.5);
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface2: var(--c-surface2);
+  --color-line: var(--c-line);
+  --color-line2: var(--c-line2);
+  --color-ink: var(--c-ink);
+  --color-dim: var(--c-dim);
+  --color-mute: var(--c-mute);
+  --color-accent: var(--c-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-lora);
+  --font-mono: var(--font-jetbrains);
+}
+
+/* ── Base ── */
+html, body { height: 100%; }
+
+body {
+  background-color: var(--c-bg);
+  color: var(--c-ink);
+}
+
+::selection { background: var(--c-accent-soft); }
+
+/* ── Global transition ── */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease;
+}
+
+/* ── Thin scrollbar ── */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line2) transparent;
+}
+.scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: var(--c-line2); border-radius: 4px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Drawer animations ── */
+@keyframes scrim-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes drawer-enter {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes modal-enter {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.scrim-enter  { animation: scrim-enter  150ms ease                             forwards; }
+.drawer-enter { animation: drawer-enter 180ms cubic-bezier(.22, .61, .36, 1)  forwards; }
+.modal-enter  { animation: modal-enter  180ms cubic-bezier(.22, .61, .36, 1)  forwards; }
+
+/* ── Rich-text note body ── */
+.note-body {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--c-ink);
+  outline: none;
+}
+.note-body p           { margin: 0 0 0.9em; }
+.note-body ul          { list-style: disc;    padding-left: 1.4em; margin: 0 0 0.9em; }
+.note-body ol          { list-style: decimal; padding-left: 1.4em; margin: 0 0 0.9em; }
+.note-body li          { margin: 0.15em 0; }
+/* TipTap wraps list item content in <p> — strip that margin so items don't double-space */
+.note-body li > p      { margin: 0; }
+.note-body strong      { font-weight: 700; }
+.note-body em          { font-style: italic; opacity: 0.9; }
+.note-body u           { text-decoration: underline; }
+.note-body s           { text-decoration: line-through; }
+.note-body h1          { font-size: 1.75em; margin: 1em 0 0.35em; }
+.note-body h2          { font-size: 1.35em; margin: 0.9em 0 0.3em; }
+.note-body h3          { font-size: 1.1em;  margin: 0.8em 0 0.25em; }
+.note-body h1, .note-body h2, .note-body h3 {
+  font-family: var(--font-inter), sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--c-ink);
+}
+.note-body blockquote  { border-left: 3px solid var(--c-line2); margin: 0.5em 0; padding: 0.1em 0 0.1em 1em; color: var(--c-dim); }
+.note-body code        { font-family: var(--font-jetbrains), monospace; font-size: 0.85em; background: var(--c-surface2); border: 1px solid var(--c-line); padding: 0.1em 0.35em; border-radius: 3px; }
+.note-body pre         { background: var(--c-surface2); border: 1px solid var(--c-line); border-radius: 6px; padding: 0.75em 1em; overflow-x: auto; margin: 0 0 0.9em; }
+.note-body pre code    { background: none; border: none; padding: 0; font-size: 0.875em; }
+.note-body a           { color: var(--c-accent); text-decoration: underline; }
+.note-body hr          { border: none; border-top: 1px solid var(--c-line2); margin: 1.5em 0; }
+
+/* Table */
+.note-body table       { width: 100%; border-collapse: collapse; margin: 0 0 1em; font-size: 0.93em; }
+.note-body td,
+.note-body th          { border: 1px solid var(--c-line2); padding: 0.45em 0.8em; text-align: left; vertical-align: top; min-width: 80px; }
+.note-body th          { background: var(--c-surface2); font-weight: 600; font-size: 0.85em; text-transform: none; }
+.note-body tr:hover td { background: var(--c-surface); }
+
+/* TipTap table selection */
+.note-body .selectedCell::after { background: var(--c-accent-soft); }
+.note-body .column-resize-handle { background-color: var(--c-accent); width: 2px; }
+.note-body .tableWrapper          { overflow-x: auto; }
+
+/* TipTap placeholder (empty paragraphs show as nothing by default — good) */
+.note-body p.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--c-mute);
+  float: left;
+  pointer-events: none;
+  height: 0;
+}

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link2, FileText, Globe, ExternalLink, Trash2, Edit2,
-  ChevronRight, Bookmark,
+  ChevronRight, ChevronLeft, Bookmark, Search, X,
 } from "lucide-react";
 import {
   PageHeader, Modal, TextField, PrimaryButton, GhostButton, EmptyState,
@@ -67,6 +67,10 @@ function summaryToHtml(summary: string): string {
 function isEmptySummary(html: string): boolean {
   return !html || html === "<p></p>" || /^<p>\s*<\/p>$/.test(html);
 }
+function htmlToPlain(s: string): string {
+  if (!s) return "";
+  return s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
 
 function rowFromDb(r: Record<string, unknown>): ReadingItem {
   return {
@@ -84,9 +88,13 @@ function rowFromDb(r: Record<string, unknown>): ReadingItem {
 
 /* ── Page ──────────────────────────────────────────────── */
 
+const PAGE_SIZE = 25;
+
 export default function ReadingPage() {
   const [items,       setItems]       = useState<ReadingItem[]>([]);
   const [filter,      setFilter]      = useState<"all" | Kind>("all");
+  const [query,       setQuery]       = useState("");
+  const [page,        setPage]        = useState(1);
   const [expandedId,  setExpandedId]  = useState<string | null>(null);
   const [editEntry,   setEditEntry]   = useState<ReadingItem | null>(null);
   const [urlOpen,     setUrlOpen]     = useState(false);
@@ -146,55 +154,175 @@ export default function ReadingPage() {
     pdf: items.filter((i) => i.kind === "pdf").length,
   }), [items]);
 
-  const filtered = useMemo(
-    () => items.filter((i) => filter === "all" || i.kind === filter),
-    [items, filter]
-  );
+  const filtered = useMemo(() => {
+    const byKind = items.filter((i) => filter === "all" || i.kind === filter);
+    const q = query.trim().toLowerCase();
+    if (!q) return byKind;
+    return byKind.filter((i) => {
+      const haystack = [
+        i.title,
+        i.source,
+        i.url ?? "",
+        i.fileName ?? "",
+        htmlToPlain(i.summary),
+      ].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [items, filter, query]);
+
+  // Reset to first page whenever the result set shrinks/changes.
+  useEffect(() => { setPage(1); }, [filter, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage   = Math.min(page, totalPages);
+  const pageStart  = (safePage - 1) * PAGE_SIZE;
+  const pageItems  = filtered.slice(pageStart, pageStart + PAGE_SIZE);
 
   const currentId = items[0]?.id; // most-recently added = currently reading
 
   return (
-    <div className="w-full px-12 py-10">
-      <PageHeader
-        title="Reading Log"
-        subtitle={`${items.length} saved`}
-        right={
-          <div className="flex items-center gap-2">
-            <GhostButton onClick={() => setUrlOpen(true)} icon={Link2}>URL</GhostButton>
-            <GhostButton onClick={() => setPdfOpen(true)} icon={FileText}>PDF</GhostButton>
-          </div>
-        }
-      />
+    <div className="h-full overflow-y-auto scroll-thin">
+      <div className="w-full px-12 py-10">
+        <PageHeader
+          title="Reading Log"
+          subtitle={`${items.length} saved`}
+          right={
+            <div className="flex items-center gap-2">
+              <GhostButton onClick={() => setUrlOpen(true)} icon={Link2}>URL</GhostButton>
+              <GhostButton onClick={() => setPdfOpen(true)} icon={FileText}>PDF</GhostButton>
+            </div>
+          }
+        />
 
-      <div className="flex items-center justify-end mb-5 -mt-3">
-        <FilterTabs value={filter} onChange={setFilter} counts={counts} />
+        <div className="flex items-center justify-between gap-4 mb-5 -mt-3">
+          <SearchInput value={query} onChange={setQuery} />
+          <FilterTabs value={filter} onChange={setFilter} counts={counts} />
+        </div>
+
+        {items.length === 0 ? (
+          <EmptyState icon={Bookmark} line="Nothing here yet — save a link or PDF to get started." />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon={Bookmark}
+            line={query ? `No entries match “${query}”.` : "No entries match this filter."}
+          />
+        ) : (
+          <>
+            <ReadingTable
+              items={pageItems}
+              currentId={currentId}
+              expandedId={expandedId}
+              onToggle={(id) => setExpandedId((c) => (c === id ? null : id))}
+              onEdit={(entry) => setEditEntry(entry)}
+              onDelete={deleteItem}
+            />
+            <Pagination
+              page={safePage}
+              totalPages={totalPages}
+              total={filtered.length}
+              pageStart={pageStart}
+              pageEnd={pageStart + pageItems.length}
+              onPrev={() => setPage((p) => Math.max(1, p - 1))}
+              onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+            />
+          </>
+        )}
+
+        {editEntry && (
+          <EditDrawer
+            key={editEntry.id}
+            entry={editEntry}
+            onClose={() => setEditEntry(null)}
+            onSave={updateItem}
+          />
+        )}
+        {urlOpen && <AddUrlDrawer onClose={() => setUrlOpen(false)} onAdd={addItem} />}
+        {pdfOpen && <AddPdfDrawer onClose={() => setPdfOpen(false)} onAdd={addItem} />}
       </div>
+    </div>
+  );
+}
 
-      {items.length === 0 ? (
-        <EmptyState icon={Bookmark} line="Nothing here yet — save a link or PDF to get started." />
-      ) : filtered.length === 0 ? (
-        <EmptyState icon={Bookmark} line="No entries match this filter." />
-      ) : (
-        <ReadingTable
-          items={filtered}
-          currentId={currentId}
-          expandedId={expandedId}
-          onToggle={(id) => setExpandedId((c) => (c === id ? null : id))}
-          onEdit={(entry) => setEditEntry(entry)}
-          onDelete={deleteItem}
-        />
-      )}
+/* ── Search input ──────────────────────────────────────── */
 
-      {editEntry && (
-        <EditDrawer
-          key={editEntry.id}
-          entry={editEntry}
-          onClose={() => setEditEntry(null)}
-          onSave={updateItem}
-        />
+function SearchInput({
+  value, onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative w-full max-w-sm">
+      <Search
+        size={14}
+        strokeWidth={1.6}
+        className="absolute left-3 top-1/2 -translate-y-1/2 text-mute pointer-events-none"
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search title, source, notes…"
+        className="w-full bg-surface border border-line rounded-md pl-9 pr-8 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+      />
+      {value && (
+        <button
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded text-mute hover:text-ink hover:bg-surface2"
+        >
+          <X size={12} strokeWidth={1.8} />
+        </button>
       )}
-      {urlOpen && <AddUrlDrawer onClose={() => setUrlOpen(false)} onAdd={addItem} />}
-      {pdfOpen && <AddPdfDrawer onClose={() => setPdfOpen(false)} onAdd={addItem} />}
+    </div>
+  );
+}
+
+/* ── Pagination ────────────────────────────────────────── */
+
+function Pagination({
+  page, totalPages, total, pageStart, pageEnd, onPrev, onNext,
+}: {
+  page: number;
+  totalPages: number;
+  total: number;
+  pageStart: number;
+  pageEnd: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const prevDisabled = page <= 1;
+  const nextDisabled = page >= totalPages;
+  return (
+    <div className="flex items-center justify-between mt-5 text-[13px] text-mute">
+      <span className="tabular-nums">
+        Showing <span className="text-dim">{pageStart + 1}</span>–
+        <span className="text-dim">{pageEnd}</span> of{" "}
+        <span className="text-dim">{total}</span>
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={onPrev}
+          disabled={prevDisabled}
+          aria-label="Previous page"
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-line bg-surface text-dim hover:text-ink hover:border-line2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-dim disabled:hover:border-line"
+        >
+          <ChevronLeft size={14} strokeWidth={1.8} />
+          Prev
+        </button>
+        <span className="px-2.5 py-1.5 tabular-nums text-dim">
+          Page {page} of {totalPages}
+        </span>
+        <button
+          onClick={onNext}
+          disabled={nextDisabled}
+          aria-label="Next page"
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-line bg-surface text-dim hover:text-ink hover:border-line2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-dim disabled:hover:border-line"
+        >
+          Next
+          <ChevronRight size={14} strokeWidth={1.8} />
+        </button>
+      </div>
     </div>
   );
 }

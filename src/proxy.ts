@@ -32,7 +32,7 @@ export async function proxy(request: NextRequest) {
 
   if (user && pathname.startsWith("/auth")) {
     const url = request.nextUrl.clone();
-    url.pathname = "/diary";
+    url.pathname = "/home";
     return NextResponse.redirect(url);
   }
 

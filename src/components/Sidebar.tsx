@@ -4,14 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Clock, BookOpen, Bookmark, FileText, TrendingUp, Home,
+  Clock, BookOpen, Bookmark, FileText, TrendingUp, Home, Newspaper,
   ChevronRight, LogOut,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import type { User } from "@supabase/supabase-js";
 
 const NAV_ITEMS = [
-  { href: "/feed",    label: "Feed",         Icon: Home },
+  { href: "/home",    label: "Home",         Icon: Home },
+  { href: "/feed",    label: "Feed",         Icon: Newspaper },
   { href: "/diary",   label: "Hourly Diary", Icon: Clock },
   { href: "/vocab",   label: "Vocabulary",   Icon: BookOpen },
   { href: "/reading", label: "Reading Log",  Icon: Bookmark },

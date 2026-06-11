@@ -243,7 +243,7 @@ export default function NotesPage() {
                           if (e.key === "Enter") commitRename();
                           if (e.key === "Escape") { setRenameValue(sec.name); setRenamingId(null); }
                         }}
-                        className="flex-1 min-w-0 text-[13px] font-medium bg-transparent outline-none text-ink"
+                        className="flex-1 min-w-0 text-[13.5px] font-medium bg-transparent outline-none text-ink"
                       />
                     </div>
                   ) : (
@@ -257,7 +257,7 @@ export default function NotesPage() {
                         <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full" style={{ backgroundColor: sec.color }} />
                       )}
                       <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: sec.color }} />
-                      <span className={`flex-1 min-w-0 text-[13px] font-medium truncate ${activeSectionId === sec.id ? "text-ink" : "text-dim"}`}>{sec.name}</span>
+                      <span className={`flex-1 min-w-0 text-[13.5px] font-medium truncate ${activeSectionId === sec.id ? "text-ink" : "text-dim"}`}>{sec.name}</span>
                       <span className="text-[10.5px] tabular-nums text-mute">{notes.filter((n) => n.sectionId === sec.id).length}</span>
                     </button>
                   )}
@@ -270,7 +270,7 @@ export default function NotesPage() {
             </ul>
             <div className="border-t border-line px-3 py-3 flex-shrink-0">
               <button onClick={addSection}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[12.5px] text-dim hover:text-ink hover:bg-surface">
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[13.5px] text-dim hover:text-ink hover:bg-surface">
                 <Plus size={13} strokeWidth={1.5} />New section
               </button>
             </div>

@@ -4,21 +4,49 @@
 -- ============================================================
 
 -- ── diary_entries ──────────────────────────────────────────
+-- Each row is one "item" in the timeline. Multiple items can share the same
+-- (user, date, hour). The daily note lives at hour = 0 and is limited to one
+-- row per day via a partial unique index below.
 CREATE TABLE diary_entries (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   date       DATE NOT NULL,
-  hour       SMALLINT NOT NULL CHECK (hour >= 6 AND hour <= 24),
+  hour       SMALLINT NOT NULL CHECK (hour >= 0 AND hour <= 24),
   content    TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (user_id, date, hour)
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE diary_entries ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users own their diary entries"
   ON diary_entries FOR ALL
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
+
+CREATE UNIQUE INDEX diary_one_daily_note_per_day
+  ON diary_entries (user_id, date)
+  WHERE hour = 0;
+CREATE INDEX diary_entries_user_date_idx
+  ON diary_entries (user_id, date);
+
+-- ── diary_hour_ratings ─────────────────────────────────────
+-- Per-hour satisfaction rating (1 = poor, 5 = great).
+CREATE TABLE diary_hour_ratings (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  date       DATE NOT NULL,
+  hour       SMALLINT NOT NULL CHECK (hour >= 0 AND hour <= 24),
+  rating     SMALLINT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (user_id, date, hour)
+);
+ALTER TABLE diary_hour_ratings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users own their diary hour ratings"
+  ON diary_hour_ratings FOR ALL
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+CREATE INDEX diary_hour_ratings_user_date_idx
+  ON diary_hour_ratings (user_id, date);
 
 -- ── vocab_words ────────────────────────────────────────────
 CREATE TABLE vocab_words (
@@ -108,6 +136,10 @@ CREATE TRIGGER trg_reading_items_updated_at
 
 CREATE TRIGGER trg_notes_updated_at
   BEFORE UPDATE ON notes
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_diary_hour_ratings_updated_at
+  BEFORE UPDATE ON diary_hour_ratings
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ── PDF storage bucket ─────────────────────────────────────

@@ -82,7 +82,26 @@ export function RichEditor({
   }
 
   return (
-    <div className="border border-line rounded-md bg-bg overflow-hidden focus-within:border-line2 transition-colors">
+    <div
+      className="border border-line rounded-md bg-bg overflow-hidden focus-within:border-line2 transition-colors"
+      // Treat the whole container as one input: any click that isn't on a
+      // toolbar button or already inside the contenteditable drops the caret
+      // into the editor. Without this, clicks landing on the toolbar gutter
+      // (the empty strip between buttons) or the editor's padding would hit
+      // a non-focusable <div> and leave focus stranded on the previously
+      // focused field (usually the Title input) — which is what made it
+      // feel like clicking "in the box" did nothing.
+      onMouseDown={(e) => {
+        const target = e.target as HTMLElement;
+        if (
+          !target.closest("button") &&
+          !target.closest('[contenteditable="true"]')
+        ) {
+          e.preventDefault();
+          editor.commands.focus();
+        }
+      }}
+    >
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-line bg-surface">
         <ToolBtn active={editor.isActive("bold")}      title="Bold (Ctrl+B)"      onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={13} strokeWidth={2} /></ToolBtn>
@@ -109,17 +128,11 @@ export function RichEditor({
         <ToolBtn active={editor.isActive("orderedList")} title="Numbered list" onClick={() => editor.chain().focus().toggleOrderedList().run()}><ListOrdered size={13} strokeWidth={1.5} /></ToolBtn>
       </div>
 
-      {/* Editor body — click anywhere in this area focuses the editor so a
-          stray click in the padding zone doesn't silently swallow keyboard
-          focus (which manifested as "Ctrl+V does nothing"). */}
-      <div
-        className="px-3 py-2 relative cursor-text"
-        onMouseDown={(e) => {
-          // Only re-focus if the click landed on the wrapper itself, not on
-          // a child (otherwise Tiptap's own selection logic fights us).
-          if (e.target === e.currentTarget) editor.commands.focus();
-        }}
-      >
+      {/* Editor body — focus is handled by the container-level onMouseDown
+          above, so any click in this padding zone (or the toolbar gutter)
+          lands the caret in the editor instead of leaving focus on the
+          previously-focused field. */}
+      <div className="px-3 py-2 relative cursor-text">
         <EditorContent editor={editor} />
         {placeholder && editor.isEmpty && (
           <span
@@ -150,6 +163,12 @@ function ToolBtn({
     <button
       type="button"
       title={title}
+      // Toolbar buttons are mouse-driven affordances; keep them out of the
+      // keyboard tab order so Tab moves directly from the previous field
+      // into the editor body (and from the editor to the form actions).
+      // Without this, users had to step through every B/I/U/H2/H3/list
+      // button before they could start typing.
+      tabIndex={-1}
       onMouseDown={(e) => { e.preventDefault(); onClick(); }}
       className={[
         "w-7 h-7 flex items-center justify-center rounded flex-shrink-0",

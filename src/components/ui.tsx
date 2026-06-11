@@ -84,7 +84,7 @@ export function Modal({
         onClick={onClose}
       />
       <div
-        className="relative bg-surface border border-line rounded-lg modal-enter flex flex-col max-h-[90vh]"
+        className="relative bg-surface border border-line rounded-xl modal-enter flex flex-col max-h-[90vh] overflow-hidden"
         style={{ width: "100%", maxWidth: width, boxShadow: "var(--shadow-drawer)" }}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-line">
@@ -122,7 +122,7 @@ export function PageHeader({
     <div className="flex items-end justify-between mb-8">
       <div>
         <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="text-[13px] text-mute mt-1">{subtitle}</p>}
+        {subtitle && <p className="text-[13.5px] text-mute mt-1">{subtitle}</p>}
       </div>
       {right}
     </div>
@@ -158,7 +158,7 @@ export function TextField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[14px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
       />
     </label>
   );
@@ -190,7 +190,7 @@ export function TextArea({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[14px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2 resize-none"
+        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2 resize-none"
       />
     </label>
   );
@@ -249,7 +249,7 @@ export function BulletTextArea({
         onChange={(e) => { onChange(e.target.value); resize(e.target); }}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[14px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2 resize-none"
+        className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2 resize-none"
       />
     </label>
   );
@@ -269,7 +269,7 @@ export function PrimaryButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="bg-accent text-white text-[13px] font-medium px-4 py-2 rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+      className="bg-accent text-white text-[13.5px] font-medium px-4 py-2 rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
     >
       {children}
     </button>
@@ -289,7 +289,7 @@ export function GhostButton({
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 text-[13px] text-dim hover:text-ink border border-line hover:border-line2 rounded-md px-3 py-1.5 bg-surface"
+      className="inline-flex items-center gap-1.5 text-[13.5px] text-dim hover:text-ink border border-line hover:border-line2 rounded-md px-3 py-1.5 bg-surface"
     >
       {Icon && <Icon size={14} strokeWidth={1.5} />}
       {children}
@@ -344,7 +344,7 @@ export function EmptyState({
       <div className="text-mute">
         <Icon size={28} strokeWidth={1.25} />
       </div>
-      <p className="text-[13px] text-mute">{line}</p>
+      <p className="text-[13.5px] text-mute">{line}</p>
     </div>
   );
 }

@@ -562,7 +562,7 @@ export default function MarketsPage() {
         <div className="flex items-end justify-between mb-8">
           <div>
             <h1 className="text-[22px] font-semibold tracking-tight">Markets</h1>
-            <p className="text-[13px] text-mute mt-1">
+            <p className="text-[13.5px] text-mute mt-1">
               {countryItems.length} countr{countryItems.length !== 1 ? "ies" : "y"} tracked
             </p>
           </div>
@@ -570,7 +570,7 @@ export default function MarketsPage() {
             <select
               value={countrySelect}
               onChange={(e) => setCountrySelect(e.target.value)}
-              className="h-8 pl-2.5 pr-7 text-[13px] bg-surface border border-line rounded-md text-dim focus:outline-none focus:border-line2"
+              className="h-8 pl-2.5 pr-7 text-[13.5px] bg-surface border border-line rounded-md text-dim focus:outline-none focus:border-line2"
             >
               <option value="">Add country…</option>
               {availableCountries.map((c) => (
@@ -580,7 +580,7 @@ export default function MarketsPage() {
             <button
               onClick={handleAddCountry}
               disabled={!countrySelect}
-              className="h-8 px-3 text-[13px] font-medium bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="h-8 px-3 text-[13.5px] font-medium bg-accent text-white rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
             >
               <Plus size={13} strokeWidth={2} /> Add
             </button>
@@ -591,11 +591,11 @@ export default function MarketsPage() {
         {countryItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
             <Globe size={28} strokeWidth={1.25} className="text-mute" />
-            <p className="text-[13px] text-mute">No countries tracked. Use the dropdown above to add one.</p>
+            <p className="text-[13.5px] text-mute">No countries tracked. Use the dropdown above to add one.</p>
           </div>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-line">
-            <table className="w-full text-[13px]">
+            <table className="w-full text-[13.5px]">
               <thead>
                 <tr className="border-b border-line bg-surface">
                   <th className="w-9" />

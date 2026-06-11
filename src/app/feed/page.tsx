@@ -145,7 +145,7 @@ export default function FeedPage() {
             <button
               onClick={load}
               disabled={loading}
-              className="h-8 px-3 text-[13px] font-medium bg-surface border border-line rounded-md text-dim hover:text-ink hover:border-line2 disabled:opacity-50 flex items-center gap-1.5"
+              className="h-8 px-3 text-[13.5px] font-medium bg-surface border border-line rounded-md text-dim hover:text-ink hover:border-line2 disabled:opacity-50 flex items-center gap-1.5"
             >
               <RefreshCw size={13} strokeWidth={1.5} className={loading ? "animate-spin" : ""} />
               Refresh
@@ -164,7 +164,7 @@ export default function FeedPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search titles…"
-                className="h-8 w-64 pl-8 pr-3 bg-surface border border-line rounded-md text-[13px] text-ink placeholder:text-mute focus:outline-none focus:border-line2"
+                className="h-8 w-64 pl-8 pr-3 bg-surface border border-line rounded-md text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2"
               />
             </div>
 
@@ -202,7 +202,7 @@ export default function FeedPage() {
 
         {/* ── Body ── */}
         {loading && items.length === 0 ? (
-          <div className="rounded-lg border border-line p-12 text-center text-[13px] text-mute">
+          <div className="rounded-lg border border-line p-12 text-center text-[13.5px] text-mute">
             Loading…
           </div>
         ) : items.length === 0 ? (
@@ -268,7 +268,7 @@ function SourceChip({
   return (
     <button
       onClick={onClick}
-      className={`h-8 px-3 rounded-md text-[12px] font-medium tracking-wide transition-colors flex items-center gap-1.5 ${
+      className={`h-8 px-3 rounded-md text-[13.5px] font-medium tracking-wide transition-colors flex items-center gap-1.5 ${
         active
           ? "bg-surface2 border border-line2 text-ink"
           : "bg-surface border border-line text-dim hover:text-ink hover:border-line2"

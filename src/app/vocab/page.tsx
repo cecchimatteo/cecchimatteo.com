@@ -53,7 +53,7 @@ export default function VocabPage() {
             <div className="relative">
               <Search size={14} strokeWidth={1.5} className="absolute left-3 top-1/2 -translate-y-1/2 text-mute pointer-events-none" />
               <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search words…"
-                className="w-64 pl-9 pr-3 py-1.5 bg-surface border border-line rounded-md text-[13px] text-ink placeholder:text-mute focus:outline-none focus:border-line2" />
+                className="w-64 pl-9 pr-3 py-1.5 bg-surface border border-line rounded-md text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2" />
             </div>
           }
         />
@@ -80,12 +80,12 @@ function VocabCard({ word, onDelete }: { word: VocabWord; onDelete: () => void }
   return (
     <div className="group bg-surface border border-line rounded-lg p-5 flex flex-col hover:border-line2" style={{ minHeight: 180, boxShadow: "var(--shadow-card)" }}>
       <div className="flex items-start justify-between mb-2">
-        <h3 className="text-[20px] font-serif font-medium tracking-tight">{word.word}</h3>
+        <h3 className="text-[20px] font-medium tracking-tight">{word.word}</h3>
         <button onClick={onDelete} className="text-mute hover:text-ink opacity-0 group-hover:opacity-100 p-1 -mr-1 rounded" aria-label="Delete">
           <Trash2 size={14} strokeWidth={1.5} />
         </button>
       </div>
-      <p className="text-[13px] font-serif italic text-dim leading-relaxed flex-1">{word.definition}</p>
+      <p className="text-[13.5px] italic text-dim leading-relaxed flex-1">{word.definition}</p>
       <div className="mt-3 flex items-end justify-between gap-2">
         {word.tags.length > 0
           ? <div className="flex flex-wrap gap-1">{word.tags.map((t) => <Pill key={t}>{t}</Pill>)}</div>

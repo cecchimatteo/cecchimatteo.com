@@ -49,8 +49,8 @@ export default function AuthPage() {
         {done ? (
           <div className="text-center py-4">
             <p className="text-[15px] font-medium mb-2">Check your email</p>
-            <p className="text-[13px] text-mute">We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account, then sign in.</p>
-            <button onClick={() => { setDone(false); setMode("signin"); }} className="mt-6 text-[13px] text-accent hover:underline">
+            <p className="text-[13.5px] text-mute">We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account, then sign in.</p>
+            <button onClick={() => { setDone(false); setMode("signin"); }} className="mt-6 text-[13.5px] text-accent hover:underline">
               Back to sign in
             </button>
           </div>
@@ -59,7 +59,7 @@ export default function AuthPage() {
             <h1 className="text-[20px] font-semibold tracking-tight mb-1">
               {mode === "signin" ? "Sign in" : "Create account"}
             </h1>
-            <p className="text-[13px] text-mute mb-6">
+            <p className="text-[13.5px] text-mute mb-6">
               {mode === "signin" ? "Welcome back." : "Your personal journaling workspace."}
             </p>
 
@@ -73,7 +73,7 @@ export default function AuthPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[14px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+                  className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
                 />
               </label>
               <label className="block">
@@ -84,7 +84,7 @@ export default function AuthPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[14px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+                  className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
                 />
               </label>
 
@@ -93,7 +93,7 @@ export default function AuthPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="mt-2 bg-accent text-white text-[13px] font-medium px-4 py-2 rounded-md hover:opacity-90 disabled:opacity-50"
+                className="mt-2 bg-accent text-white text-[13.5px] font-medium px-4 py-2 rounded-md hover:opacity-90 disabled:opacity-50"
               >
                 {loading ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
               </button>

@@ -104,6 +104,25 @@ function formatDue(iso?: string): { label: string; tone: "overdue" | "today" | "
   return { label, tone };
 }
 
+class ApiError extends Error {
+  status: number;
+  code?: number;
+  upstreamStatus?: number;
+  upstreamBody?: string;
+  constructor(message: string, opts: {
+    status: number;
+    code?: number;
+    upstreamStatus?: number;
+    upstreamBody?: string;
+  }) {
+    super(message);
+    this.status = opts.status;
+    this.code = opts.code;
+    this.upstreamStatus = opts.upstreamStatus;
+    this.upstreamBody = opts.upstreamBody;
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -114,8 +133,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let data: unknown = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* ignore */ }
   if (!res.ok) {
-    const err = (data as { error?: string })?.error ?? `request_failed_${res.status}`;
-    throw new Error(err);
+    const d = data as { error?: string; status?: number; code?: number; body?: string; message?: string } | null;
+    throw new ApiError(d?.error ?? d?.message ?? `request_failed_${res.status}`, {
+      status: res.status,
+      code: d?.code,
+      upstreamStatus: d?.status,
+      upstreamBody: d?.body,
+    });
   }
   return data as T;
 }
@@ -780,10 +804,31 @@ function SignInCard({ onSignedIn }: { onSignedIn: () => void | Promise<void> }) 
       });
       await onSignedIn();
     } catch (e) {
+      const ae = e instanceof ApiError ? e : null;
       const msg = e instanceof Error ? e.message : "signin_failed";
-      if (msg === "ticktick_auth") setErr("Invalid email or password.");
-      else if (msg === "ticktick_captcha") setErr("TickTick is asking for a captcha. Sign in once at ticktick.com in your browser, then retry.");
-      else setErr(msg);
+
+      if (msg === "ticktick_auth") {
+        const body = ae?.upstreamBody ?? "";
+        // TickTick sometimes returns a useful errorMessage we can show.
+        let detail = "";
+        try {
+          const j = body ? JSON.parse(body) as { errorMessage?: string; message?: string } : null;
+          detail = j?.errorMessage ?? j?.message ?? "";
+        } catch { /* not JSON */ }
+        setErr(detail ? `Invalid credentials — ${detail}` : "Invalid email or password.");
+      } else if (msg === "ticktick_captcha") {
+        setErr("TickTick is asking for a captcha. Sign in once at ticktick.com in your browser on this same network, then retry.");
+      } else if (msg === "ticktick_api_error") {
+        const status = ae?.upstreamStatus;
+        const code = ae?.code;
+        const preview = (ae?.upstreamBody ?? "").slice(0, 200);
+        setErr(
+          `TickTick rejected the sign-in (HTTP ${status ?? "?"}${code ? `, code ${code}` : ""}). ` +
+          (preview ? `Body: ${preview}` : "Check the dev server console for the full response."),
+        );
+      } else {
+        setErr(msg);
+      }
     } finally {
       setBusy(false);
     }

@@ -18,7 +18,7 @@
  * Region: `global` (api.ticktick.com) or `china` (api.dida365.com).
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { createServerSupabase } from "./supabase-server";
 import { decryptString, encryptString, type Encrypted } from "./crypto";
 
@@ -35,24 +35,37 @@ function siteBase(region: Region): string {
 
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const DEFAULT_TIMEZONE =
   Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+/**
+ * TickTick's web client sends an `x-device` JSON blob on every API call.
+ * The shape and field set here matches what current ticktick.com sends.
+ * `id` should be a 24-hex char string (Mongo ObjectId style).
+ */
 function deviceHeader(deviceId: string) {
   return JSON.stringify({
     platform: "web",
     os: "OS X",
-    device: "Chrome 120.0.0.0",
+    device: "Chrome 124.0.0.0",
     name: "",
-    version: 4576,
+    version: 6133,
     id: deviceId,
     channel: "website",
     campaign: "",
     websocket: "",
   });
 }
+
+/** Browser-like headers Cloudflare/TickTick sometimes check on login. */
+const BROWSER_HEADERS: Record<string, string> = {
+  "Accept-Language": "en-US,en;q=0.9",
+  "Sec-Fetch-Dest": "empty",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Site": "same-site",
+};
 
 /* ── Types (subset; the real payload has more) ──────────── */
 
@@ -205,39 +218,62 @@ async function signOn(opts: {
   deviceId: string;
 }): Promise<SignOnResponse> {
   const url = `${apiBase(opts.region)}/api/v2/user/signon?wc=true&remember=true`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "User-Agent": DEFAULT_USER_AGENT,
-      Origin: siteBase(opts.region),
-      Referer: `${siteBase(opts.region)}/`,
-      "x-device": deviceHeader(opts.deviceId),
-    },
-    body: JSON.stringify({ username: opts.email, password: opts.password }),
-    cache: "no-store",
-  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": DEFAULT_USER_AGENT,
+        Origin: siteBase(opts.region),
+        Referer: `${siteBase(opts.region)}/`,
+        "x-device": deviceHeader(opts.deviceId),
+        ...BROWSER_HEADERS,
+      },
+      body: JSON.stringify({ username: opts.email, password: opts.password }),
+      cache: "no-store",
+    });
+  } catch (err) {
+    console.error("[ticktick/signon] network error", { url, err });
+    throw new TickTickError(0, err instanceof Error ? err.message : "network_error");
+  }
+
   const text = await res.text();
-  if (!res.ok) {
-    let code: number | undefined;
-    try { code = (JSON.parse(text) as { errorCode?: number; code?: number }).errorCode ?? (JSON.parse(text) as { code?: number }).code; } catch {}
+  let parsed: Record<string, unknown> | null = null;
+  try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { /* not JSON */ }
+  const code: number | undefined =
+    typeof parsed?.errorCode === "number" ? (parsed!.errorCode as number)
+    : typeof parsed?.code === "number" ? (parsed!.code as number)
+    : undefined;
+  const token = typeof parsed?.token === "string" ? (parsed!.token as string) : "";
+
+  // TickTick sometimes returns HTTP 200 with an error JSON. Treat any
+  // response that lacks a token as a failure.
+  const failed = !res.ok || !token;
+
+  if (failed) {
+    console.error("[ticktick/signon] failed", {
+      url,
+      status: res.status,
+      statusText: res.statusText,
+      contentType: res.headers.get("content-type"),
+      code,
+      bodyPreview: text.slice(0, 800),
+      hadParsedJson: !!parsed,
+    });
+
     if (code === 2001) throw new TickTickCaptchaError(text);
-    if (res.status === 400 || res.status === 401) {
-      throw new TickTickAuthError(res.status, text || "invalid_credentials", code);
+
+    // 1009 = wrong username/password, 1010 = account locked. Treat as auth.
+    if (res.status === 400 || res.status === 401 || code === 1009 || code === 1010) {
+      throw new TickTickAuthError(res.status || 401, text || "invalid_credentials", code);
     }
     throw new TickTickError(res.status, text, code);
   }
-  let parsed: SignOnResponse;
-  try {
-    parsed = JSON.parse(text) as SignOnResponse;
-  } catch {
-    throw new TickTickError(res.status, `non-JSON sign-on response: ${text}`);
-  }
-  if (!parsed.token) {
-    throw new TickTickAuthError(res.status, text || "no_token");
-  }
-  return parsed;
+
+  return parsed as unknown as SignOnResponse;
 }
 
 /* ── Public: connect / disconnect ───────────────────────── */
@@ -253,7 +289,8 @@ export async function connect(userId: string, opts: {
   region?: Region;
 }) {
   const region: Region = opts.region ?? "global";
-  const deviceId = randomUUID();
+  // TickTick expects a 24-hex device id (Mongo-ObjectId style).
+  const deviceId = newObjectId();
 
   const session = await signOn({ ...opts, region, deviceId });
 
@@ -322,6 +359,7 @@ async function rawRequest<T>(
     Cookie: `t=${cookieT}`,
     "x-device": deviceHeader(row.device_id),
     "x-tz": DEFAULT_TIMEZONE,
+    ...BROWSER_HEADERS,
   };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
 

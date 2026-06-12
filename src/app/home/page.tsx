@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2, Circle, Trash2, Edit2, Plus, RefreshCw, Calendar,
   Flag, ListTodo, Inbox, ChevronRight, Search, X, AlertCircle,
+  Eye, EyeOff, Lock, Mail, ShieldCheck,
 } from "lucide-react";
 import {
   PageHeader, Modal, TextField, TextArea, PrimaryButton, GhostButton, EmptyState, Pill,
@@ -16,10 +17,11 @@ type Priority = 0 | 1 | 3 | 5;
 interface TickTickProject {
   id:        string;
   name:      string;
-  color?:    string;
-  closed?:   boolean;
-  groupId?:  string;
+  color?:    string | null;
+  closed?:   boolean | null;
+  groupId?:  string | null;
   kind?:     "TASK" | "NOTE";
+  sortOrder?: number;
 }
 
 interface TickTickChecklistItem {
@@ -124,9 +126,11 @@ export default function HomePage() {
   const [conn,       setConn]       = useState<ConnState>({ kind: "loading" });
   const [projects,   setProjects]   = useState<TickTickProject[]>([]);
   const [tasks,      setTasks]      = useState<TickTickTask[]>([]);
-  const [selected,   setSelected]   = useState<string>("all"); // "all" | projectId
+  const [inboxId,    setInboxId]    = useState<string>("");
+  const [selected,   setSelected]   = useState<string>("all"); // "all" | projectId | inboxId
   const [query,      setQuery]      = useState("");
   const [showDone,   setShowDone]   = useState(false);
+  const [doneLoaded, setDoneLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [editTask,   setEditTask]   = useState<TickTickTask | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -148,34 +152,57 @@ export default function HomePage() {
   const loadAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      const data = await api<{ projects: TickTickProject[]; tasks: TickTickTask[] }>("/api/ticktick/all-tasks");
+      const data = await api<{
+        inboxId: string;
+        projects: TickTickProject[];
+        tasks: TickTickTask[];
+      }>("/api/ticktick/all-tasks");
+      setInboxId(data.inboxId ?? "");
       setProjects(data.projects ?? []);
-      setTasks(data.tasks ?? []);
+      setTasks((prev) => {
+        // Preserve any completed-history we lazy-loaded via /completed.
+        const open = data.tasks ?? [];
+        const completed = prev.filter((t) => t.status === 2);
+        const openIds = new Set(open.map((t) => t.id));
+        const merged = [...open, ...completed.filter((t) => !openIds.has(t.id))];
+        return merged;
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "load_failed";
-      if (msg === "ticktick_not_connected") setConn({ kind: "disconnected" });
+      if (msg === "ticktick_auth" || msg === "unauthorized") setConn({ kind: "disconnected" });
       else setBanner(msg);
     } finally {
       setRefreshing(false);
     }
   }, []);
 
+  const loadCompleted = useCallback(async () => {
+    try {
+      const list = await api<TickTickTask[]>("/api/ticktick/completed?limit=100");
+      setTasks((prev) => {
+        const ids = new Set(prev.map((t) => t.id));
+        const fresh = (list ?? []).filter((t) => !ids.has(t.id));
+        return [...prev, ...fresh];
+      });
+      setDoneLoaded(true);
+    } catch (err) {
+      setBanner(err instanceof Error ? err.message : "completed_load_failed");
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
-      const url = new URL(window.location.href);
-      const err = url.searchParams.get("ticktick_error");
-      const ok  = url.searchParams.get("ticktick");
-      if (err || ok) {
-        url.searchParams.delete("ticktick_error");
-        url.searchParams.delete("ticktick");
-        window.history.replaceState({}, "", url.toString());
-        if (err) setBanner(`TickTick error: ${err}`);
-        else if (ok === "connected") setBanner("TickTick connected");
-      }
       const s = await checkStatus();
       if (s?.connected) await loadAll();
     })();
   }, [checkStatus, loadAll]);
+
+  function toggleShowDone(next: boolean) {
+    setShowDone(next);
+    if (next && !doneLoaded && conn.kind === "connected") {
+      void loadCompleted();
+    }
+  }
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -207,11 +234,24 @@ export default function HomePage() {
     });
   }, [tasks, selected, query, showDone]);
 
+  // The unofficial API exposes an inboxId but doesn't include the Inbox in
+  // /project. We synthesize an Inbox entry so the UI can filter / label it.
+  const allProjects = useMemo<TickTickProject[]>(() => {
+    if (!inboxId) return projects;
+    const inbox: TickTickProject = {
+      id: inboxId,
+      name: "Inbox",
+      color: "#3358F4",
+      sortOrder: -1,
+    };
+    return [inbox, ...projects.filter((p) => p.id !== inboxId)];
+  }, [projects, inboxId]);
+
   const projectsById = useMemo(() => {
     const map = new Map<string, TickTickProject>();
-    for (const p of projects) map.set(p.id, p);
+    for (const p of allProjects) map.set(p.id, p);
     return map;
-  }, [projects]);
+  }, [allProjects]);
 
   /* ── Mutations (optimistic) ── */
 
@@ -267,12 +307,15 @@ export default function HomePage() {
   }
 
   async function disconnect() {
-    if (!confirm("Disconnect TickTick? Your Daybook tokens will be deleted.")) return;
+    if (!confirm("Disconnect TickTick? Your stored credentials will be deleted from Daybook.")) return;
     try {
       await api("/api/ticktick/disconnect", { method: "POST" });
       setConn({ kind: "disconnected" });
       setProjects([]);
       setTasks([]);
+      setInboxId("");
+      setDoneLoaded(false);
+      setSelected("all");
     } catch (err) {
       setBanner(err instanceof Error ? err.message : "disconnect_failed");
     }
@@ -304,27 +347,19 @@ export default function HomePage() {
   if (conn.kind === "disconnected" || conn.kind === "error") {
     return (
       <div className="h-full overflow-y-auto scroll-thin">
-        <div className="w-full max-w-2xl px-12 py-10 mx-auto">
-          <PageHeader title="Home" subtitle="Connect your TickTick account to load tasks" />
+        <div className="w-full max-w-md px-6 py-10 mx-auto">
+          <PageHeader title="Home" subtitle="Sign in to TickTick to load your tasks" />
           {conn.kind === "error" && (
             <Banner kind="error" message={conn.message} onClose={() => setConn({ kind: "disconnected" })} />
           )}
           {banner && <Banner kind="info" message={banner} onClose={() => setBanner(null)} />}
-          <div className="rounded-xl bg-surface border border-line p-8 text-center" style={{ boxShadow: "var(--shadow-card)" }}>
-            <ListTodo size={28} strokeWidth={1.25} className="mx-auto text-mute" />
-            <h2 className="mt-4 text-[16px] font-semibold tracking-tight">Connect TickTick</h2>
-            <p className="mt-1 text-[13.5px] text-dim">
-              Daybook will read your projects + open tasks, and let you create, edit, complete, and delete them right here.
-            </p>
-            <div className="mt-5 flex items-center justify-center gap-3">
-              <a
-                href="/api/ticktick/authorize"
-                className="bg-accent text-white text-[13.5px] font-medium px-4 py-2 rounded-md hover:opacity-90 inline-flex items-center gap-2"
-              >
-                <ListTodo size={14} strokeWidth={1.8} /> Connect TickTick
-              </a>
-            </div>
-          </div>
+          <SignInCard
+            onSignedIn={async () => {
+              setBanner("TickTick connected");
+              setConn({ kind: "connected" });
+              await loadAll();
+            }}
+          />
         </div>
       </div>
     );
@@ -335,7 +370,8 @@ export default function HomePage() {
   return (
     <div className="h-full overflow-hidden flex">
       <ProjectSidebar
-        projects={projects}
+        projects={allProjects}
+        inboxId={inboxId}
         selected={selected}
         onSelect={setSelected}
         counts={counts}
@@ -365,7 +401,7 @@ export default function HomePage() {
                 <input
                   type="checkbox"
                   checked={showDone}
-                  onChange={(e) => setShowDone(e.target.checked)}
+                  onChange={(e) => toggleShowDone(e.target.checked)}
                   className="accent-accent"
                 />
                 Show completed
@@ -408,7 +444,7 @@ export default function HomePage() {
           key={editTask.id}
           mode="edit"
           initial={editTask}
-          projects={projects}
+          projects={allProjects}
           onClose={() => setEditTask(null)}
           onSave={async (t) => { await saveTask(t as TickTickTask); setEditTask(null); }}
           onDelete={async (t) => { await deleteTask(t as TickTickTask); setEditTask(null); }}
@@ -417,8 +453,8 @@ export default function HomePage() {
       {createOpen && (
         <TaskDrawer
           mode="create"
-          initial={{ projectId: selected !== "all" ? selected : projects[0]?.id ?? "" }}
-          projects={projects}
+          initial={{ projectId: selected !== "all" ? selected : inboxId || projects[0]?.id || "" }}
+          projects={allProjects}
           onClose={() => setCreateOpen(false)}
           onSave={async (t) => { await createTask(t); setCreateOpen(false); }}
         />
@@ -430,16 +466,19 @@ export default function HomePage() {
 /* ── Project sidebar ───────────────────────────────────── */
 
 function ProjectSidebar({
-  projects, selected, onSelect, counts,
+  projects, inboxId, selected, onSelect, counts,
 }: {
   projects: TickTickProject[];
+  inboxId: string;
   selected: string;
   onSelect: (id: string) => void;
   counts: { all: number; byProject: Map<string, number> };
 }) {
   const sorted = useMemo(
-    () => [...projects].filter((p) => !p.closed).sort((a, b) => a.name.localeCompare(b.name)),
-    [projects],
+    () => projects
+      .filter((p) => !p.closed && p.id !== inboxId)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [projects, inboxId],
   );
   return (
     <aside
@@ -449,7 +488,7 @@ function ProjectSidebar({
       <div className="px-5 pt-7 pb-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-mute">
         Projects
       </div>
-      <ul className="px-2 pb-6 space-y-0.5">
+      <ul className="px-2 pb-2 space-y-0.5">
         <ProjectItem
           name="All tasks"
           color="var(--c-accent)"
@@ -458,17 +497,36 @@ function ProjectSidebar({
           onClick={() => onSelect("all")}
           icon={<ListTodo size={14} strokeWidth={1.6} />}
         />
-        {sorted.map((p) => (
+        {inboxId && (
           <ProjectItem
-            key={p.id}
-            name={p.name}
-            color={p.color || "var(--c-mute)"}
-            active={selected === p.id}
-            count={counts.byProject.get(p.id) ?? 0}
-            onClick={() => onSelect(p.id)}
+            name="Inbox"
+            color="var(--c-accent)"
+            active={selected === inboxId}
+            count={counts.byProject.get(inboxId) ?? 0}
+            onClick={() => onSelect(inboxId)}
+            icon={<Inbox size={14} strokeWidth={1.6} />}
           />
-        ))}
+        )}
       </ul>
+      {sorted.length > 0 && (
+        <>
+          <div className="px-5 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-mute">
+            Lists
+          </div>
+          <ul className="px-2 pb-6 space-y-0.5">
+            {sorted.map((p) => (
+              <ProjectItem
+                key={p.id}
+                name={p.name}
+                color={p.color || "var(--c-mute)"}
+                active={selected === p.id}
+                count={counts.byProject.get(p.id) ?? 0}
+                onClick={() => onSelect(p.id)}
+              />
+            ))}
+          </ul>
+        </>
+      )}
     </aside>
   );
 }
@@ -672,37 +730,156 @@ function SetupNotice() {
     <div className="rounded-xl bg-surface border border-line p-6" style={{ boxShadow: "var(--shadow-card)" }}>
       <h2 className="text-[16px] font-semibold tracking-tight">One-time TickTick setup</h2>
       <p className="mt-1 text-[13.5px] text-dim">
-        Daybook talks to TickTick&rsquo;s Open API on your behalf. You&rsquo;ll need to register a small developer app once and copy two values into <code className="px-1 rounded bg-surface2">.env.local</code>.
+        Daybook signs in to TickTick on your behalf and stores your password
+        <strong> AES-256-GCM encrypted </strong>
+        in your own Supabase. We need a single 32-byte key in
+        {" "}<code className="px-1 rounded bg-surface2">.env.local</code> to encrypt it.
       </p>
       <ol className="mt-4 space-y-2 text-[13.5px] text-dim list-decimal list-inside">
         <li>
-          Visit{" "}
-          <a className="text-accent hover:underline" href="https://developer.ticktick.com/manage" target="_blank" rel="noreferrer">
-            developer.ticktick.com/manage
-          </a>{" "}
-          and create a new app.
+          Apply the migration{" "}
+          <code className="px-1 rounded bg-surface2">supabase/ticktick_credentials.sql</code>{" "}
+          in your Supabase SQL editor.
         </li>
         <li>
-          Set the redirect URI to{" "}
-          <code className="px-1 rounded bg-surface2">http://localhost:3000/api/ticktick/callback</code>{" "}
-          (and your production URL when deploying).
+          Generate a fresh key:{" "}
+          <code className="px-1 rounded bg-surface2">openssl rand -hex 32</code>
         </li>
-        <li>
-          Copy <code className="px-1 rounded bg-surface2">Client ID</code> and{" "}
-          <code className="px-1 rounded bg-surface2">Client Secret</code> into{" "}
-          <code className="px-1 rounded bg-surface2">.env.local</code>:
-        </li>
+        <li>Add it to <code className="px-1 rounded bg-surface2">.env.local</code>:</li>
       </ol>
       <pre className="mt-3 bg-surface2 border border-line rounded-md p-3 text-[12.5px] overflow-x-auto">
-{`TICKTICK_CLIENT_ID=...
-TICKTICK_CLIENT_SECRET=...
-# Optional override (must match what's registered):
-# TICKTICK_REDIRECT_URI=https://yourdomain.com/api/ticktick/callback`}
+{`# 64 hex characters (32 random bytes). Treat as a secret.
+TICKTICK_ENC_KEY=...`}
       </pre>
       <p className="mt-3 text-[12.5px] text-mute">
-        Then restart <code>npm run dev</code> and reload this page. Full instructions live in <code>TICKTICK_SETUP.md</code>.
+        Restart <code>npm run dev</code> and reload. Full instructions live in <code>TICKTICK_SETUP.md</code>.
       </p>
     </div>
+  );
+}
+
+/* ── Sign-in card ──────────────────────────────────────── */
+
+function SignInCard({ onSignedIn }: { onSignedIn: () => void | Promise<void> }) {
+  const [email,    setEmail]    = useState("");
+  const [password, setPassword] = useState("");
+  const [region,   setRegion]   = useState<"global" | "china">("global");
+  const [show,     setShow]     = useState(false);
+  const [busy,     setBusy]     = useState(false);
+  const [err,      setErr]      = useState<string | null>(null);
+
+  async function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api("/api/ticktick/signin", {
+        method: "POST",
+        body: JSON.stringify({ email: email.trim(), password, region }),
+      });
+      await onSignedIn();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "signin_failed";
+      if (msg === "ticktick_auth") setErr("Invalid email or password.");
+      else if (msg === "ticktick_captcha") setErr("TickTick is asking for a captcha. Sign in once at ticktick.com in your browser, then retry.");
+      else setErr(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="rounded-xl bg-surface border border-line p-6"
+      style={{ boxShadow: "var(--shadow-card)" }}
+    >
+      <div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-md bg-accent-soft text-accent grid place-items-center">
+          <ListTodo size={16} strokeWidth={1.8} />
+        </div>
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight">Sign in to TickTick</h2>
+          <p className="text-[12px] text-mute">Email + password is sent to TickTick over HTTPS, then encrypted at rest.</p>
+        </div>
+      </div>
+
+      {err && (
+        <div className="mt-4 flex items-center gap-2 rounded-md border border-neg/40 bg-neg-soft text-neg px-3 py-2 text-[12.5px]">
+          <AlertCircle size={14} strokeWidth={1.6} />
+          <span>{err}</span>
+        </div>
+      )}
+
+      <div className="mt-5 space-y-4">
+        <label className="block">
+          <span className="block text-[11px] font-medium uppercase tracking-wider text-mute mb-2">Email</span>
+          <div className="relative">
+            <Mail size={14} strokeWidth={1.6} className="absolute left-3 top-1/2 -translate-y-1/2 text-mute pointer-events-none" />
+            <input
+              type="email"
+              autoComplete="username"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full bg-bg border border-line rounded-md pl-9 pr-3 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+            />
+          </div>
+        </label>
+
+        <label className="block">
+          <span className="block text-[11px] font-medium uppercase tracking-wider text-mute mb-2">Password</span>
+          <div className="relative">
+            <Lock size={14} strokeWidth={1.6} className="absolute left-3 top-1/2 -translate-y-1/2 text-mute pointer-events-none" />
+            <input
+              type={show ? "text" : "password"}
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full bg-bg border border-line rounded-md pl-9 pr-9 py-2 text-[13.5px] text-ink placeholder:text-mute focus:outline-none focus:border-line2 focus:bg-surface2"
+            />
+            <button
+              type="button"
+              onClick={() => setShow((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center rounded text-mute hover:text-ink hover:bg-surface2"
+              aria-label={show ? "Hide password" : "Show password"}
+            >
+              {show ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+          </div>
+        </label>
+
+        <label className="block">
+          <span className="block text-[11px] font-medium uppercase tracking-wider text-mute mb-2">Region</span>
+          <select
+            value={region}
+            onChange={(e) => setRegion(e.target.value as "global" | "china")}
+            className="w-full bg-bg border border-line rounded-md px-3 py-2 text-[13.5px] text-ink focus:outline-none focus:border-line2 focus:bg-surface2"
+          >
+            <option value="global">Global (ticktick.com)</option>
+            <option value="china">China (dida365.com)</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <span className="text-[11.5px] text-mute inline-flex items-center gap-1.5">
+          <ShieldCheck size={12} strokeWidth={1.8} className="text-accent" />
+          Encrypted with AES-256-GCM
+        </span>
+        <PrimaryButton onClick={() => submit()} disabled={busy || !email.trim() || !password}>
+          {busy ? "Signing in…" : "Sign in"}
+        </PrimaryButton>
+      </div>
+      <p className="mt-3 text-[11.5px] text-mute">
+        2FA-enabled TickTick accounts can&rsquo;t use this method.
+        Strongly recommend a TickTick-only password (don&rsquo;t reuse it elsewhere).
+      </p>
+    </form>
   );
 }
 

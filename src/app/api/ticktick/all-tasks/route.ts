@@ -1,26 +1,27 @@
 import { withUser } from "@/lib/route-helpers";
-import { getProjectData, listProjects, type TickTickTask } from "@/lib/ticktick";
+import { getBatchCheck, type TickTickProject, type TickTickTask } from "@/lib/ticktick";
 
 /**
- * Convenience endpoint: fan out across all (non-Inbox) projects in parallel
- * and return a flat list of open tasks plus the project list.
+ * Returns the user's full TickTick state in one shot:
+ *   - projects (real ones)
+ *   - inboxId  (synthetic Inbox project is added on the client)
+ *   - tags
+ *   - tasks    (open tasks across all projects + Inbox)
  *
- * The Open API doesn't include the Inbox in /project, so this view excludes
- * it. The Home page lets you select a project explicitly.
+ * The unofficial API gives us all of this in `/api/v2/batch/check/0`,
+ * so the UI can populate everything without fan-out.
  */
 export async function GET() {
   return withUser(async (userId) => {
-    const projects = await listProjects(userId);
-    const datas = await Promise.all(
-      projects.map((p) =>
-        getProjectData(userId, p.id).catch((err) => {
-          console.error("[all-tasks] project fetch failed", p.id, err);
-          return null;
-        }),
-      ),
-    );
-    const tasks: TickTickTask[] = [];
-    for (const d of datas) if (d?.tasks) tasks.push(...d.tasks);
-    return { projects, tasks };
+    const data = await getBatchCheck(userId);
+    const tasks: TickTickTask[] = data.syncTaskBean?.update ?? [];
+    const projects: TickTickProject[] = data.projectProfiles ?? [];
+    return {
+      inboxId: data.inboxId,
+      projects,
+      tasks,
+      tags: data.syncTagBean?.update ?? [],
+      projectGroups: data.projectGroups ?? [],
+    };
   });
 }

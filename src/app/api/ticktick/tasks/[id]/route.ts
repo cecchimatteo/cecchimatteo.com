@@ -3,8 +3,8 @@ import { withUser } from "@/lib/route-helpers";
 import { deleteTask, updateTask, type TickTickTask } from "@/lib/ticktick";
 
 /**
- * Update a task. TickTick uses POST /task/{id} (not PATCH).
- * Body must include the projectId (TickTick requires it for routing).
+ * Update a task. Body must include the projectId; the unofficial API needs
+ * it to route the change.
  */
 export async function POST(
   req: NextRequest,
@@ -23,9 +23,6 @@ export async function POST(
   );
 }
 
-/**
- * Delete a task. Requires `?projectId=...` in the query string.
- */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },

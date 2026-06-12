@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "./supabase-server";
-import { TickTickError } from "./ticktick";
+import { TickTickAuthError, TickTickCaptchaError, TickTickError } from "./ticktick";
 
 /**
- * Wraps a route handler that needs an authenticated Daybook user. Provides
- * the user id to the inner function and turns common failures into
- * appropriate HTTP responses.
+ * Wraps a route handler that needs an authenticated Daybook user. Maps
+ * common upstream failures to friendly HTTP responses.
  */
 export async function withUser<T>(
   fn: (userId: string) => Promise<T>,
@@ -19,14 +18,22 @@ export async function withUser<T>(
     const data = await fn(user.id);
     return NextResponse.json(data ?? { ok: true });
   } catch (err) {
-    if (err instanceof TickTickError) {
-      const code =
-        err.status === 401 ? "ticktick_not_connected"
-        : err.status === 404 ? "not_found"
-        : "ticktick_api_error";
+    if (err instanceof TickTickCaptchaError) {
       return NextResponse.json(
-        { error: code, status: err.status, body: err.body },
-        { status: err.status === 401 ? 401 : 502 },
+        { error: "ticktick_captcha", message: err.message },
+        { status: 403 },
+      );
+    }
+    if (err instanceof TickTickAuthError) {
+      return NextResponse.json(
+        { error: "ticktick_auth", message: err.message, code: err.code, body: err.body },
+        { status: 401 },
+      );
+    }
+    if (err instanceof TickTickError) {
+      return NextResponse.json(
+        { error: "ticktick_api_error", status: err.status, code: err.code, body: err.body },
+        { status: 502 },
       );
     }
     console.error("[ticktick route]", err);

@@ -2,9 +2,9 @@ import { withUser } from "@/lib/route-helpers";
 import { createTask, type TickTickTask } from "@/lib/ticktick";
 
 /**
- * Create a new task. Body must include at least { title, projectId }.
- * Optional: content, desc, priority (0|1|3|5), dueDate, startDate, isAllDay,
- * timeZone, items (checklist).
+ * Create a new task. Body: { title, projectId, ...optional fields }.
+ * Optional: content, priority (0|1|3|5), dueDate, startDate, isAllDay,
+ * timeZone, tags, items (subtasks).
  */
 export async function POST(req: Request) {
   const body = (await req.json()) as Partial<TickTickTask>;

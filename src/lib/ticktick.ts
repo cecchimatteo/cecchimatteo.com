@@ -1,281 +1,329 @@
 /**
- * TickTick Open API client + OAuth helpers.
+ * TickTick "private" API client.
  *
- * Docs: https://developer.ticktick.com/docs/index.html
+ * This talks to the same backend that the official mobile/web clients use,
+ * NOT the public Open API. It is unsupported, can change without notice,
+ * and requires storing the user's email + password (encrypted at rest via
+ * src/lib/crypto.ts).
  *
- * The Open API is intentionally narrow: it exposes projects and *uncompleted*
- * tasks only (no completed-task history, no habits, no inbox metadata). It
- * supports full CRUD on tasks though.
+ * High-level flow:
+ *   1. POST /api/v2/user/signon → returns { token } and a `t` cookie.
+ *   2. Store the cookie in `ticktick_credentials.cookie_t`.
+ *   3. All subsequent calls send the cookie. On 401/expired, transparently
+ *      re-sign-on using the stored (decrypted) credentials.
+ *   4. GET /api/v2/batch/check/0 returns the entire account state in one
+ *      payload (projects, tasks, tags, columns, filters, inbox, etc.).
+ *   5. POST /api/v2/batch/task with { add, update, delete } applies CRUD.
  *
- * Scopes used here: `tasks:read tasks:write`.
- *
- * Endpoints (relative to https://api.ticktick.com/open/v1):
- *   GET    /project                          → ProjectMeta[]   (excludes Inbox)
- *   GET    /project/{id}                     → ProjectMeta
- *   GET    /project/{id}/data                → { project, tasks, columns }
- *   POST   /task                             → create   (body must include projectId)
- *   POST   /task/{id}                        → update   (body must include id + projectId)
- *   POST   /project/{projectId}/task/{taskId}/complete → mark complete
- *   DELETE /project/{projectId}/task/{taskId}          → delete
- *
- * Note on the "Inbox": TickTick treats the Inbox as a virtual project with
- * id `inboxNNNNNN`. It is NOT returned by `GET /project`. To fetch its tasks,
- * call `GET /project/{userInboxProjectId}/data`. We do not currently know that
- * id without a successful call, so we expose Inbox via a marker constant and
- * the Home page lets users open it by typing/searching.
+ * Region: `global` (api.ticktick.com) or `china` (api.dida365.com).
  */
 
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServerSupabase } from "./supabase-server";
+import { decryptString, encryptString, type Encrypted } from "./crypto";
 
-export const TICKTICK_AUTHORIZE_URL = "https://ticktick.com/oauth/authorize";
-export const TICKTICK_TOKEN_URL = "https://ticktick.com/oauth/token";
-export const TICKTICK_API_BASE = "https://api.ticktick.com/open/v1";
-export const TICKTICK_SCOPES = "tasks:read tasks:write";
+/* ── Endpoints / config ─────────────────────────────────── */
 
-/* ── Types ──────────────────────────────────────────────── */
+export type Region = "global" | "china";
 
-export type TickTickPriority = 0 | 1 | 3 | 5; // none, low, medium, high
-export type TickTickStatus = 0 | 2;            // 0=open, 2=completed
-
-export interface TickTickProject {
-  id: string;
-  name: string;
-  color?: string;
-  sortOrder?: number;
-  closed?: boolean;
-  groupId?: string;
-  viewMode?: "list" | "kanban" | "timeline";
-  kind?: "TASK" | "NOTE";
+function apiBase(region: Region): string {
+  return region === "china" ? "https://api.dida365.com" : "https://api.ticktick.com";
+}
+function siteBase(region: Region): string {
+  return region === "china" ? "https://dida365.com" : "https://ticktick.com";
 }
 
-export interface TickTickChecklistItem {
-  id?: string;
-  title: string;
-  status?: TickTickStatus;
-  completedTime?: string;
-  isAllDay?: boolean;
-  sortOrder?: number;
-  startDate?: string;
-  timeZone?: string;
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+const DEFAULT_TIMEZONE =
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+function deviceHeader(deviceId: string) {
+  return JSON.stringify({
+    platform: "web",
+    os: "OS X",
+    device: "Chrome 120.0.0.0",
+    name: "",
+    version: 4576,
+    id: deviceId,
+    channel: "website",
+    campaign: "",
+    websocket: "",
+  });
 }
+
+/* ── Types (subset; the real payload has more) ──────────── */
+
+export type Priority = 0 | 1 | 3 | 5;
+export type TaskStatus = 0 | 2;
 
 export interface TickTickTask {
-  id: string;
-  projectId: string;
-  title: string;
-  content?: string;
-  desc?: string;
-  isAllDay?: boolean;
-  startDate?: string;     // ISO 8601 (e.g. "2024-11-13T03:00:00+0000")
-  dueDate?: string;
-  timeZone?: string;
-  reminders?: string[];
-  repeatFlag?: string;
-  priority?: TickTickPriority;
-  status?: TickTickStatus;
-  completedTime?: string;
+  id:           string;
+  projectId:    string;
+  title:        string;
+  content?:     string;
+  desc?:        string;
+  status?:      TaskStatus;
+  priority?:    Priority;
+  startDate?:   string | null;
+  dueDate?:     string | null;
+  completedTime?: string | null;
+  isAllDay?:    boolean;
+  timeZone?:    string;
+  reminders?:   string[];
+  repeatFlag?:  string | null;
+  tags?:        string[];
+  items?:       Array<{
+    id?:        string;
+    title:      string;
+    status?:    TaskStatus;
+    completedTime?: string | null;
+    isAllDay?:  boolean;
+    sortOrder?: number;
+    startDate?: string | null;
+    timeZone?:  string;
+  }>;
+  kind?:        "TEXT" | "CHECKLIST" | "NOTE";
+  sortOrder?:   number;
+  createdTime?: string;
+  modifiedTime?: string;
+}
+
+export interface TickTickProject {
+  id:        string;
+  name:      string;
+  color?:    string | null;
+  inAll?:    boolean;
+  closed?:   boolean | null;
+  groupId?:  string | null;
+  viewMode?: string;
+  kind?:     "TASK" | "NOTE";
   sortOrder?: number;
-  items?: TickTickChecklistItem[];
+  permission?: string;
 }
 
-export interface TickTickProjectData {
-  project: TickTickProject;
-  tasks: TickTickTask[];
-  columns?: Array<{ id: string; projectId: string; name: string; sortOrder?: number }>;
+export interface TickTickTag {
+  name:     string;
+  label?:   string;
+  color?:   string | null;
+  parent?:  string | null;
+  sortOrder?: number;
+  sortType?: string;
 }
 
-interface TokenRow {
+export interface BatchCheck {
+  inboxId:           string;
+  projectProfiles:   TickTickProject[];
+  syncTaskBean:      { update?: TickTickTask[]; delete?: string[] };
+  syncTagBean:       { update?: TickTickTag[]; delete?: string[] };
+  projectGroups?:    Array<{ id: string; name: string; sortOrder?: number; userId?: string }>;
+  filters?:          Array<{ id: string; name: string; rule?: string; sortOrder?: number }>;
+  syncOrderBean?:    unknown;
+  remindChanges?:    unknown;
+  checkPoint?:       number;
+}
+
+/* ── DB row ─────────────────────────────────────────────── */
+
+interface CredsRow {
   user_id: string;
-  access_token: string;
-  refresh_token: string | null;
-  token_type: string;
-  scope: string;
-  expires_at: string; // ISO timestamp
+  email: string;
+  password_ciphertext: string;
+  password_iv: string;
+  password_tag: string;
+  region: Region;
+  cookie_t: string | null;
+  cookie_expires_at: string | null;
+  device_id: string;
+  inbox_id: string | null;
+  ticktick_user_id: string | null;
+  last_signed_in_at: string | null;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  token_type: string;
-  expires_in: number;
-  scope?: string;
-}
-
-/* ── Env / config ───────────────────────────────────────── */
-
-export function ticktickConfig() {
-  const clientId = process.env.TICKTICK_CLIENT_ID;
-  const clientSecret = process.env.TICKTICK_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    throw new Error(
-      "TickTick is not configured. Set TICKTICK_CLIENT_ID and TICKTICK_CLIENT_SECRET in .env.local. See TICKTICK_SETUP.md.",
-    );
-  }
-  return { clientId, clientSecret };
-}
-
-/**
- * Build the redirect URI that we send to TickTick. It MUST match exactly what
- * was registered at https://developer.ticktick.com/manage. We prefer an env
- * override (production) and otherwise derive it from the incoming request.
- */
-export function ticktickRedirectUri(origin: string): string {
-  return process.env.TICKTICK_REDIRECT_URI || `${origin}/api/ticktick/callback`;
-}
-
-/* ── OAuth ──────────────────────────────────────────────── */
-
-export function buildAuthorizeUrl(opts: {
-  redirectUri: string;
-  state: string;
-  scope?: string;
-}) {
-  const { clientId } = ticktickConfig();
-  const url = new URL(TICKTICK_AUTHORIZE_URL);
-  url.searchParams.set("client_id", clientId);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", opts.scope ?? TICKTICK_SCOPES);
-  url.searchParams.set("redirect_uri", opts.redirectUri);
-  url.searchParams.set("state", opts.state);
-  return url.toString();
-}
-
-async function postTokenForm(body: URLSearchParams): Promise<TokenResponse> {
-  const { clientId, clientSecret } = ticktickConfig();
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-  const res = await fetch(TICKTICK_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${basic}`,
-      Accept: "application/json",
-    },
-    body,
-    cache: "no-store",
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`TickTick token endpoint ${res.status}: ${text}`);
-  }
-  try {
-    return JSON.parse(text) as TokenResponse;
-  } catch {
-    throw new Error(`TickTick token endpoint returned non-JSON: ${text}`);
-  }
-}
-
-export async function exchangeCodeForToken(opts: {
-  code: string;
-  redirectUri: string;
-}) {
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code: opts.code,
-    redirect_uri: opts.redirectUri,
-    scope: TICKTICK_SCOPES,
-  });
-  return postTokenForm(body);
-}
-
-async function refreshAccessToken(refreshToken: string) {
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    scope: TICKTICK_SCOPES,
-  });
-  return postTokenForm(body);
-}
-
-/* ── Token storage ──────────────────────────────────────── */
-
-export async function saveTokens(userId: string, t: TokenResponse) {
-  const supabase = await createServerSupabase();
-  const expiresAt = new Date(Date.now() + (t.expires_in - 60) * 1000).toISOString();
-  const { error } = await supabase
-    .from("ticktick_tokens")
-    .upsert({
-      user_id: userId,
-      access_token: t.access_token,
-      refresh_token: t.refresh_token ?? null,
-      token_type: t.token_type || "Bearer",
-      scope: t.scope || TICKTICK_SCOPES,
-      expires_at: expiresAt,
-    }, { onConflict: "user_id" });
-  if (error) throw error;
-}
-
-export async function loadTokens(userId: string): Promise<TokenRow | null> {
+async function loadCreds(userId: string): Promise<CredsRow | null> {
   const supabase = await createServerSupabase();
   const { data, error } = await supabase
-    .from("ticktick_tokens")
+    .from("ticktick_credentials")
     .select("*")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
-  return (data as TokenRow | null) ?? null;
+  return (data as CredsRow | null) ?? null;
 }
 
-export async function deleteTokens(userId: string) {
+async function saveCreds(row: Partial<CredsRow> & { user_id: string }) {
   const supabase = await createServerSupabase();
-  await supabase.from("ticktick_tokens").delete().eq("user_id", userId);
+  const { error } = await supabase
+    .from("ticktick_credentials")
+    .upsert(row, { onConflict: "user_id" });
+  if (error) throw error;
 }
 
-/**
- * Returns a usable access token for the current user, refreshing it if it
- * has expired (or will expire within 60s — covered already by saveTokens).
- * Returns `null` if the user has not connected TickTick.
- */
-export async function getValidAccessToken(userId: string): Promise<string | null> {
-  const row = await loadTokens(userId);
-  if (!row) return null;
-
-  const expiresAt = new Date(row.expires_at).getTime();
-  if (expiresAt > Date.now()) return row.access_token;
-
-  if (!row.refresh_token) return null;
-  const fresh = await refreshAccessToken(row.refresh_token);
-  // TickTick may return the same refresh token; preserve the old one if absent.
-  if (!fresh.refresh_token) fresh.refresh_token = row.refresh_token;
-  await saveTokens(userId, fresh);
-  return fresh.access_token;
+async function deleteCreds(userId: string) {
+  const supabase = await createServerSupabase();
+  await supabase.from("ticktick_credentials").delete().eq("user_id", userId);
 }
 
-/* ── Authenticated fetch ────────────────────────────────── */
-
-interface TickTickFetchInit extends Omit<RequestInit, "body"> {
-  body?: unknown; // serialized as JSON
-  searchParams?: Record<string, string | number | boolean | undefined>;
-}
+/* ── Errors ─────────────────────────────────────────────── */
 
 export class TickTickError extends Error {
   status: number;
+  code?: number;
   body: string;
-  constructor(status: number, body: string, message?: string) {
-    super(message ?? `TickTick API ${status}: ${body}`);
+  constructor(status: number, body: string, code?: number) {
+    super(`TickTick ${status}${code ? ` (code ${code})` : ""}: ${body}`);
     this.status = status;
     this.body = body;
+    this.code = code;
   }
 }
 
-export async function tickTickFetch<T = unknown>(
-  userId: string,
-  path: string,
-  init: TickTickFetchInit = {},
-): Promise<T> {
-  const token = await getValidAccessToken(userId);
-  if (!token) throw new TickTickError(401, "not_connected", "TickTick not connected");
+export class TickTickAuthError extends TickTickError {}
+export class TickTickCaptchaError extends TickTickError {
+  constructor(body: string) {
+    super(403, body, 2001);
+    this.message = "TickTick requires a captcha. Sign in at ticktick.com once, then retry.";
+  }
+}
 
-  const url = new URL(`${TICKTICK_API_BASE}${path.startsWith("/") ? path : `/${path}`}`);
+/* ── Sign-on ────────────────────────────────────────────── */
+
+interface SignOnResponse {
+  token: string;
+  userId: string;
+  inboxId?: string;
+  username?: string;
+  userCode?: string;
+}
+
+async function signOn(opts: {
+  email: string;
+  password: string;
+  region: Region;
+  deviceId: string;
+}): Promise<SignOnResponse> {
+  const url = `${apiBase(opts.region)}/api/v2/user/signon?wc=true&remember=true`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": DEFAULT_USER_AGENT,
+      Origin: siteBase(opts.region),
+      Referer: `${siteBase(opts.region)}/`,
+      "x-device": deviceHeader(opts.deviceId),
+    },
+    body: JSON.stringify({ username: opts.email, password: opts.password }),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let code: number | undefined;
+    try { code = (JSON.parse(text) as { errorCode?: number; code?: number }).errorCode ?? (JSON.parse(text) as { code?: number }).code; } catch {}
+    if (code === 2001) throw new TickTickCaptchaError(text);
+    if (res.status === 400 || res.status === 401) {
+      throw new TickTickAuthError(res.status, text || "invalid_credentials", code);
+    }
+    throw new TickTickError(res.status, text, code);
+  }
+  let parsed: SignOnResponse;
+  try {
+    parsed = JSON.parse(text) as SignOnResponse;
+  } catch {
+    throw new TickTickError(res.status, `non-JSON sign-on response: ${text}`);
+  }
+  if (!parsed.token) {
+    throw new TickTickAuthError(res.status, text || "no_token");
+  }
+  return parsed;
+}
+
+/* ── Public: connect / disconnect ───────────────────────── */
+
+/**
+ * Persist credentials and complete an initial sign-on. Throws
+ * TickTickAuthError / TickTickCaptchaError on user-fixable failures so the
+ * route handler can surface a friendly message.
+ */
+export async function connect(userId: string, opts: {
+  email: string;
+  password: string;
+  region?: Region;
+}) {
+  const region: Region = opts.region ?? "global";
+  const deviceId = randomUUID();
+
+  const session = await signOn({ ...opts, region, deviceId });
+
+  const enc: Encrypted = encryptString(opts.password);
+  await saveCreds({
+    user_id: userId,
+    email: opts.email,
+    password_ciphertext: enc.ciphertext,
+    password_iv: enc.iv,
+    password_tag: enc.tag,
+    region,
+    cookie_t: session.token,
+    cookie_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(), // best-effort: 30d
+    device_id: deviceId,
+    inbox_id: session.inboxId ?? null,
+    ticktick_user_id: session.userId,
+    last_signed_in_at: new Date().toISOString(),
+  });
+}
+
+export async function disconnect(userId: string) {
+  await deleteCreds(userId);
+}
+
+export async function status(userId: string): Promise<{
+  connected: boolean;
+  configured: boolean;
+  email?: string;
+  lastSignedInAt?: string | null;
+}> {
+  const configured = !!process.env.TICKTICK_ENC_KEY;
+  const row = await loadCreds(userId);
+  return {
+    connected: !!row,
+    configured,
+    email: row?.email,
+    lastSignedInAt: row?.last_signed_in_at ?? null,
+  };
+}
+
+/* ── Authenticated request ──────────────────────────────── */
+
+interface FetchInit {
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  body?: unknown;
+  searchParams?: Record<string, string | number | boolean | undefined>;
+}
+
+async function rawRequest<T>(
+  row: CredsRow,
+  cookieT: string,
+  path: string,
+  init: FetchInit,
+): Promise<{ ok: true; data: T } | { ok: false; status: number; body: string; code?: number }> {
+  const url = new URL(`${apiBase(row.region)}${path.startsWith("/") ? path : `/${path}`}`);
   if (init.searchParams) {
     for (const [k, v] of Object.entries(init.searchParams)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
   }
-
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("Accept", "application/json");
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "User-Agent": DEFAULT_USER_AGENT,
+    Origin: siteBase(row.region),
+    Referer: `${siteBase(row.region)}/`,
+    Cookie: `t=${cookieT}`,
+    "x-device": deviceHeader(row.device_id),
+    "x-tz": DEFAULT_TIMEZONE,
+  };
+  if (init.body !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await fetch(url, {
     method: init.method ?? (init.body !== undefined ? "POST" : "GET"),
@@ -284,39 +332,245 @@ export async function tickTickFetch<T = unknown>(
     cache: "no-store",
     redirect: "follow",
   });
-
   const text = await res.text();
-  if (!res.ok) throw new TickTickError(res.status, text);
-  if (!text) return undefined as T;
+  if (!res.ok) {
+    let code: number | undefined;
+    try { code = (JSON.parse(text) as { errorCode?: number; code?: number }).errorCode ?? (JSON.parse(text) as { code?: number }).code; } catch {}
+    return { ok: false, status: res.status, body: text, code };
+  }
+  if (!text) return { ok: true, data: undefined as unknown as T };
   try {
-    return JSON.parse(text) as T;
+    return { ok: true, data: JSON.parse(text) as T };
   } catch {
-    return text as unknown as T;
+    return { ok: true, data: text as unknown as T };
   }
 }
 
-/* ── Convenience wrappers ──────────────────────────────── */
+/**
+ * Authenticated request with transparent re-sign-on on 401.
+ */
+async function tickTickRequest<T>(
+  userId: string,
+  path: string,
+  init: FetchInit = {},
+): Promise<T> {
+  let row = await loadCreds(userId);
+  if (!row) throw new TickTickAuthError(401, "not_connected");
 
-export function listProjects(userId: string) {
-  return tickTickFetch<TickTickProject[]>(userId, "/project");
+  let cookie = row.cookie_t;
+  // If we never have a cookie, sign on once first.
+  if (!cookie) {
+    const password = decryptString({
+      ciphertext: row.password_ciphertext,
+      iv: row.password_iv,
+      tag: row.password_tag,
+    });
+    const session = await signOn({
+      email: row.email,
+      password,
+      region: row.region,
+      deviceId: row.device_id,
+    });
+    cookie = session.token;
+    await saveCreds({
+      user_id: userId,
+      cookie_t: cookie,
+      cookie_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(),
+      inbox_id: session.inboxId ?? row.inbox_id,
+      ticktick_user_id: session.userId,
+      last_signed_in_at: new Date().toISOString(),
+    });
+    row = { ...row, cookie_t: cookie };
+  }
+
+  let attempt = await rawRequest<T>(row, cookie, path, init);
+  if (attempt.ok) return attempt.data;
+
+  // On any auth-ish failure, try re-signing in once and retry.
+  if (attempt.status === 401 || attempt.status === 403 || attempt.code === 4001 || attempt.code === 401) {
+    const password = decryptString({
+      ciphertext: row.password_ciphertext,
+      iv: row.password_iv,
+      tag: row.password_tag,
+    });
+    let session: SignOnResponse;
+    try {
+      session = await signOn({
+        email: row.email,
+        password,
+        region: row.region,
+        deviceId: row.device_id,
+      });
+    } catch (err) {
+      if (err instanceof TickTickAuthError) throw err;
+      throw err;
+    }
+    cookie = session.token;
+    await saveCreds({
+      user_id: userId,
+      cookie_t: cookie,
+      cookie_expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(),
+      inbox_id: session.inboxId ?? row.inbox_id,
+      ticktick_user_id: session.userId,
+      last_signed_in_at: new Date().toISOString(),
+    });
+    attempt = await rawRequest<T>({ ...row, cookie_t: cookie }, cookie, path, init);
+    if (attempt.ok) return attempt.data;
+  }
+
+  throw new TickTickError(attempt.status, attempt.body, attempt.code);
 }
 
-export function getProjectData(userId: string, projectId: string) {
-  return tickTickFetch<TickTickProjectData>(userId, `/project/${projectId}/data`);
+/* ── Batch check (full state) ───────────────────────────── */
+
+export async function getBatchCheck(userId: string): Promise<BatchCheck> {
+  const data = await tickTickRequest<BatchCheck>(userId, "/api/v2/batch/check/0");
+  // Cache the inboxId for callers that need it.
+  if (data.inboxId) {
+    await saveCreds({ user_id: userId, inbox_id: data.inboxId }).catch(() => {});
+  }
+  return data;
 }
 
-export function createTask(userId: string, task: Partial<TickTickTask> & { title: string; projectId: string }) {
-  return tickTickFetch<TickTickTask>(userId, "/task", { method: "POST", body: task });
+/* ── Task CRUD via /batch/task ──────────────────────────── */
+
+/**
+ * Generates a 24-hex-char ID compatible with TickTick's MongoDB ObjectId
+ * convention: 4-byte timestamp + 8-byte random.
+ */
+export function newObjectId(): string {
+  const ts = Math.floor(Date.now() / 1000)
+    .toString(16)
+    .padStart(8, "0")
+    .slice(-8);
+  const rand = randomBytes(8).toString("hex");
+  return ts + rand;
 }
 
-export function updateTask(userId: string, task: Partial<TickTickTask> & { id: string; projectId: string }) {
-  return tickTickFetch<TickTickTask>(userId, `/task/${task.id}`, { method: "POST", body: task });
+interface BatchTaskBody {
+  add?: Partial<TickTickTask>[];
+  update?: Partial<TickTickTask>[];
+  delete?: Array<{ projectId: string; taskId: string }>;
+  addAttachments?: unknown[];
+  updateAttachments?: unknown[];
 }
 
-export async function completeTask(userId: string, projectId: string, taskId: string) {
-  await tickTickFetch<void>(userId, `/project/${projectId}/task/${taskId}/complete`, { method: "POST" });
+async function batchTask(userId: string, body: BatchTaskBody) {
+  return tickTickRequest<{ id2error?: Record<string, string>; id2etag?: Record<string, string> }>(
+    userId,
+    "/api/v2/batch/task",
+    { method: "POST", body },
+  );
+}
+
+export async function createTask(userId: string, input: Partial<TickTickTask> & { title: string; projectId: string }): Promise<TickTickTask> {
+  const id = input.id ?? newObjectId();
+  const task: Partial<TickTickTask> = {
+    kind: "TEXT",
+    isAllDay: false,
+    timeZone: DEFAULT_TIMEZONE,
+    priority: 0,
+    status: 0,
+    sortOrder: 0,
+    items: [],
+    reminders: [],
+    tags: [],
+    ...input,
+    id,
+  };
+  await batchTask(userId, { add: [task] });
+  return task as TickTickTask;
+}
+
+export async function updateTask(userId: string, input: Partial<TickTickTask> & { id: string; projectId: string }): Promise<TickTickTask> {
+  await batchTask(userId, { update: [input] });
+  return input as TickTickTask;
+}
+
+export async function completeTask(userId: string, projectId: string, taskId: string, existing?: Partial<TickTickTask>) {
+  const update: Partial<TickTickTask> = {
+    ...existing,
+    id: taskId,
+    projectId,
+    status: 2,
+    completedTime: new Date().toISOString(),
+  };
+  await batchTask(userId, { update: [update] });
 }
 
 export async function deleteTask(userId: string, projectId: string, taskId: string) {
-  await tickTickFetch<void>(userId, `/project/${projectId}/task/${taskId}`, { method: "DELETE" });
+  await batchTask(userId, { delete: [{ projectId, taskId }] });
+}
+
+/* ── Completed history (per-project or all) ─────────────── */
+
+export interface ClosedTaskQuery {
+  from?: string;   // ISO datetime
+  to?: string;
+  limit?: number;  // default 50
+  status?: "Completed" | "Abandoned";
+}
+
+export async function listCompletedTasks(userId: string, q: ClosedTaskQuery = {}): Promise<TickTickTask[]> {
+  return tickTickRequest<TickTickTask[]>(userId, "/api/v2/project/all/closed", {
+    searchParams: {
+      from: q.from,
+      to: q.to,
+      limit: q.limit ?? 50,
+      status: q.status ?? "Completed",
+    },
+  });
+}
+
+/* ── Habits ─────────────────────────────────────────────── */
+
+export interface TickTickHabit {
+  id: string;
+  name: string;
+  iconRes?: string;
+  color?: string;
+  sortOrder?: number;
+  status?: number;       // 0 = active, 1 = archived
+  encouragement?: string;
+  totalCheckIns?: number;
+  type?: "Boolean" | "Real";
+  goal?: number;
+  step?: number;
+  unit?: string;
+  repeatRule?: string;
+  reminders?: string[];
+  recordEnable?: boolean;
+  sectionId?: string;
+  targetDays?: number;
+  completedCycles?: number;
+  exDates?: string[];
+  style?: string;
+}
+
+export interface TickTickHabitCheckin {
+  habitId: string;
+  checkinStamp: number; // YYYYMMDD
+  checkinTime?: string;
+  goal?: number;
+  status?: 0 | 1 | 2;   // 0 not done, 1 incomplete, 2 done
+  value?: number;
+  id?: string;
+  opTime?: string;
+}
+
+export async function listHabits(userId: string): Promise<TickTickHabit[]> {
+  return tickTickRequest<TickTickHabit[]>(userId, "/api/v2/habits");
+}
+
+export async function listHabitCheckins(userId: string, habitIds: string[], afterStamp?: number): Promise<{
+  checkins: Record<string, TickTickHabitCheckin[]>;
+}> {
+  if (habitIds.length === 0) return { checkins: {} };
+  const stamp = afterStamp ?? Number(
+    new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10).replace(/-/g, ""),
+  );
+  return tickTickRequest(userId, "/api/v2/habitCheckins/query", {
+    method: "POST",
+    body: { habitIds, afterStamp: stamp },
+  });
 }
